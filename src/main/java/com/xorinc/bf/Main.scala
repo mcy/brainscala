@@ -100,7 +100,7 @@ object Interpreter {
         case '[' => 1
         case ']' => -1
       }.sum != 0
-    ) throw new Exception() // TODO
+    ) throw ParseException("Unbalanced loop delimiters!") // TODO
 
     def doCompile(iter: Iterator[Char], list: List[Instruction] = Nil): Program = {
       def enterLoop(list: List[Instruction] = Nil): Loop = {
