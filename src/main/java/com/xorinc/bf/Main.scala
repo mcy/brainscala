@@ -65,7 +65,13 @@ object Interpreter {
   case   object Right extends Instruction { override def apply(): Unit = Tape.right() }
   case   object Left  extends Instruction { override def apply(): Unit = Tape.left() }
   case   object Write extends Instruction { override def apply(): Unit = Console.out.print(Tape()) }
-  case   object Read  extends Instruction { override def apply(): Unit = Tape() = Console.in.read().toChar }
+  case   object Read  extends Instruction {
+    override def apply(): Unit =
+      Tape() = (Console.in.read() match {
+        case -1 => 0
+        case c => c
+      }).toChar
+  }
 
   final case class Loop(ops: List[Instruction]) extends Instruction {
     override def apply(): Unit = do ops.foreach(_()) while (Tape() != 0)
