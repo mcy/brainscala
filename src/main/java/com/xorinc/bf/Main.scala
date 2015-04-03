@@ -8,26 +8,38 @@ import reflect.{ClassTag, classTag}
 import engine._
 
 import language.dynamics
+
+import Default._
+
+class Default[+A](val default: A)
+
+trait LowerPriorityImplicits {
+  // Stop AnyRefs from clashing with AnyVals
+  implicit def defaultNull[A <: AnyRef]:Default[A] = new Default[A](null.asInstanceOf[A])
+}
+
+object Default extends LowerPriorityImplicits {
+  implicit object DefaultDouble extends Default[Double](0.0)
+  implicit object DefaultFloat extends Default[Float](0.0F)
+  implicit object DefaultInt extends Default[Int](0)
+  implicit object DefaultLong extends Default[Long](0L)
+  implicit object DefaultShort extends Default[Short](0)
+  implicit object DefaultByte extends Default[Byte](0)
+  implicit object DefaultChar extends Default[Char]('\u0000')
+  implicit object DefaultBoolean extends Default[Boolean](false)
+  implicit object DefaultUnit extends Default[Unit](())
+
+  def default[A](implicit value: Default[A]): A = value.default
+}
+
 sealed trait Options extends Dynamic {
   protected def get(s: String): Option[Any]
-  final def selectDynamic[A : ClassTag](s: String): A = {
+  final def applyDynamic[A : ClassTag](s: String)(default: A): A = {
     val clazz = classTag[A].runtimeClass
-    clazz.cast(get(s).getOrElse(default[A])).asInstanceOf[A]
+    get(s).getOrElse(default).asInstanceOf[A]
   }
-
-  private sealed case class Def[A](x: A)
-  private object default {
-
-    def default[A](implicit ev: Def[A]): A = ev.x
-
-    implicit val Z = Def[Byte](0.toByte)
-    implicit val B = Def[Byte](0.toByte)
-    implicit val S = Def[Short](0.toShort)
-    implicit val I = Def[Int](0)
-    implicit val J = Def[Long](0L)
-    implicit val F = Def[Float](0F)
-    implicit val D = Def[Double](0D)
-    implicit val L = Def[AnyRef](null)
+  final def selectDynamic[A : ClassTag : Default](s: String): A = {
+    this.applyDynamic[A](s)(default[A])(classTag[A])
   }
 }
 
@@ -35,11 +47,13 @@ object Main {
 
   private implicit def e2t(e: Engine): (String, Engine) = e.name -> e
 
-  val engines = Map(Interpreter)
+  val engines = Map(Interpreter, CCompiler)
 
   def main(args: Array[String]): Unit = {
 
-    val opts = new Options with Dynamic { self: this.type =>
+    val opts = new Options with Dynamic {
+
+      private val self = this
 
       private val map = collection.mutable.Map.empty[String, Any]
 
@@ -52,7 +66,7 @@ object Main {
         opt[Unit]('c', "literal-input") action ((_, _) => map("inAsString") = true) text "take the input as a string, not a file"
 
         for ((s, e) <- engines)
-          e.register(cmd(s) action {(_, _) => map("engine") = e})
+          e.register(this, cmd(s) action {(_, _) => map("engine") = e}, map(_) = _)
 
         arg[String]("<script>") maxOccurs 1 action ((x, _) =>
         map("in") =

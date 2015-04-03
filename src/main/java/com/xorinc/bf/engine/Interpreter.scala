@@ -9,17 +9,6 @@ case object Interpreter extends Engine {
 
   override def apply(src: String, opts: Options): Int = {
 
-    val script = {
-      val buffer = new StringBuilder
-      val in = new BufferedReader(opts.in[Reader])
-      var line: String = null
-      do {
-        line = in.readLine()
-        buffer ++= line + "\n"
-      } while (line ne null)
-      buffer.toString()
-    }
-
     val prog =
       try compile(src)
       catch {
