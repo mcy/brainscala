@@ -34,8 +34,10 @@ object Default extends LowerPriorityImplicits {
 
 sealed trait Options extends Dynamic {
   protected def get(s: String): Option[Any]
+
+  final def apply(s: String): Boolean = get(s).nonEmpty
   final def applyDynamic[A : ClassTag](s: String)(default: A): A = {
-    val clazz = classTag[A].runtimeClass
+    //val clazz = classTag[A].runtimeClass
     get(s).getOrElse(default).asInstanceOf[A]
   }
   final def selectDynamic[A : ClassTag : Default](s: String): A = {
@@ -47,7 +49,7 @@ object Main {
 
   private implicit def e2t(e: Engine): (String, Engine) = e.name -> e
 
-  val engines = Map(Interpreter, CCompiler)
+  val engines = Map(Interpreter, GCC, GCC.JNI)
 
   def main(args: Array[String]): Unit = {
 

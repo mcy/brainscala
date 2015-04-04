@@ -4,8 +4,13 @@ import java.io.{Reader, BufferedReader}
 
 import com.xorinc.bf._
 import Compiler._
+import scopt.{OptionDef, OptionParser}
 
 case object Interpreter extends Engine {
+
+  override def register(parser: OptionParser[Unit], cmd: OptionDef[_, Unit], update: (String, Any) => Unit): Unit = {
+    cmd text "compiles a script and interprets it"
+  }
 
   override def apply(src: String, opts: Options): Int = {
 
