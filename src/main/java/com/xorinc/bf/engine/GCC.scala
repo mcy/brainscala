@@ -21,7 +21,11 @@ object GCC extends Engine {
           validate(s => if(s.matches(jniPathPattern)) success else failure("path is not of the form `my.package.AnClass.method'"))
           text "path to the native method, in the form `my.package.AnClass.method'",
         parser.opt[File]('d', "directory") action ((f, _) => update("jni_dir", f)) maxOccurs 1
-          text "directory to do JNI compilation and output files"
+          text "directory to do JNI compilation and output files",
+        parser.opt[Unit]("use-input-stream") action ((_, _) => update("jni_useInput", true)) maxOccurs 1
+          text "if the method takes input, it will take an InputStream as an argument",
+        parser.opt[Unit]("use-getchar") action ((_, _) => update("jni_usegetchar", true)) maxOccurs 1
+          text "!!DON'T USE ME, I'M BROKEN!! if the method takes input, it will use the native getchar() method"
       ) text """output a jni-compatible library, to the given method.
                |if `exit-status' is set, the returned value is int
                |otherwise, it will return void (Unit)""".stripMargin
@@ -67,6 +71,8 @@ object GCC extends Engine {
 
       val className = path(path.length - 2)
       val hasReads = src.contains(",")
+      val useInStr = opts.jni_useInput[Boolean]
+      val useGetChar = opts.jni_usegetchar[Boolean]
 
       val jWidth = width match {
         case "char" => "byte"
@@ -76,7 +82,7 @@ object GCC extends Engine {
 
       val JWidth = jWidth(0).toUpper + jWidth.drop(1)
 
-      val jSrc = jniJavaSrc(path, jWidth, opts.exitCode[Boolean], hasReads)
+      val jSrc = jniJavaSrc(path, jWidth, opts.exitCode[Boolean], hasReads && !useGetChar, useInStr && !useGetChar)
 
       write(new File(dir, className + ".java"), jSrc)
 
@@ -91,7 +97,7 @@ object GCC extends Engine {
       val sigPattern =
         """
           |JNIEXPORT (.+) JNICALL (.+)
-          |  \(JNIEnv \*, jclass(, jbyteArray)?\);
+          |  \(JNIEnv \*, jclass(?:, (.+))?\);
           |""".stripMargin.r
 
       val sig = sigPattern.findFirstMatchIn(header).get
@@ -100,10 +106,11 @@ object GCC extends Engine {
         s"""
          |#include <jni.h>
          |#include "${hName + ".h"}"
-         |${ if(hasReads) "\n#define HASREADS\n" else "" }
+         |${ if(useGetChar) "" else if(useInStr) "\n#define INPSTR\n" else if(hasReads) "\n#define HASREADS\n" else "" }
+         |${ if(sig.group(3) ne null) "#define EXTRAARG\n" else ""}
          |JNIEXPORT ${sig.group(1)} JNICALL ${sig.group(2)} (JNIEnv *env, jclass clazz
-         |#ifdef HASREADS
-         |  ,j${jWidth}Array a
+         |#ifdef EXTRAARG
+         |  ,${sig.group(3)} a
          |#endif
          |) {
          |  $width tape[${1 << 16}] = {0};
@@ -119,12 +126,18 @@ object GCC extends Engine {
          |    length = (*env)->GetArrayLength(env, a);
          |#define getchar() (index < length ? *(in++) : '\0'); index++;
          |#endif
+         |#ifdef INPSTR
+         |  jclass InputStream = (*env)->FindClass(env, "java/io/InputStream");
+         |  jmethodID read = (*env)->GetMethodID(env, InputStream, "read", "()I");
+         |  jint readHolder;
+         |#define getchar() (readHolder = (*env)->CallIntMethod(env, a, read), readHolder == -1 ? 0 : readHolder)
+         |#endif
          |  /* start generated code */
-         |  $optimized
+         |$optimized
          |  /* end generated code */
          |  ${if(opts.exitCode[Boolean]) "return (int) *p;" else ""}
          |}
-       """.stripMargin
+         |""".stripMargin
 
       val cFile = path.mkString("_") + ".c"
 
@@ -144,6 +157,36 @@ object GCC extends Engine {
       }
 
       i
+    }
+
+    private val jniPathPattern = "(?:[a-zA-Z_0-9]+\\.)+(?:[a-zA-Z_0-9]+)"
+
+    private def jniJavaSrc(path: Array[String], width: String, hasReturn: Boolean, hasInput: Boolean, useInStr: Boolean) = {
+      val pack =
+        if(path.length > 2)
+          s"package ${path.slice(0, path.length - 2).mkString(".")};"
+        else ""
+      val name = path(path.length - 2)
+      val meth = path(path.length - 1)
+      val arg =
+        if(useInStr)
+          "InputStream a"
+        else if(hasInput)
+          s"$width[] a"
+        else ""
+      val ret = if(hasReturn) "int" else "void"
+      val imp = if(useInStr) "import java.io.InputStream;" else ""
+
+      s"""
+       |$pack
+       |$imp
+       |public final class $name {
+       |    static { System.loadLibrary("${path.mkString("_")}"); }
+       |    public $name() { throw new Error(); }
+       |    public static native $ret $meth($arg);
+       |    public static void main(String... args) { $meth(${if(useInStr) "System.in" else if(hasInput) s"new $width[0]" else ""}); }
+       |}
+     """.stripMargin
     }
   }
   
@@ -221,34 +264,6 @@ object GCC extends Engine {
       case Read  => "*p = getchar(); " * i
     }
     case WrappedLoop(ops) => s"while(*p){\n${ops.map(toC).mkString("\n")}\n}"
-  }
-
-  private val jniPathPattern = "(?:[a-zA-Z_0-9]+\\.)+(?:[a-zA-Z_0-9]+)"
-
-  private def jniJavaSrc(path: Array[String], width: String, hasReturn: Boolean, hasInput: Boolean) = {
-    val pack =
-      if(path.length > 2)
-        s"package ${path.slice(0, path.length - 2).mkString(".")};"
-      else ""
-    val name = path(path.length - 2)
-    val meth = path(path.length - 1)
-    val arrType =
-      if(hasInput)
-        s"$width[] a"
-      else ""
-    val ret = if(hasReturn) "int" else "void"
-
-
-
-    s"""
-       |$pack
-       |public final class $name {
-       |    static { System.loadLibrary("${path.mkString("_")}"); }
-       |    public $name() { throw new Error(); }
-       |    public static native $ret $meth($arrType);
-       |    public static void main(String... args) { $meth(${if(arrType.nonEmpty) s"new $width[0]" else ""}); }
-       |}
-     """.stripMargin
   }
 
   private implicit class _procFile(val s: String) extends AnyVal {
