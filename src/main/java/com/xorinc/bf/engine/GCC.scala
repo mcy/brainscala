@@ -22,8 +22,10 @@ object GCC extends Engine {
           text "path to the native method, in the form `my.package.AnClass.method'",
         parser.opt[File]('d', "directory") action ((f, _) => update("jni_dir", f)) maxOccurs 1
           text "directory to do JNI compilation and output files",
-        parser.opt[Unit]("use-input-stream") action ((_, _) => update("jni_useInput", true)) maxOccurs 1
+        parser.opt[Unit]("use-in-stream") action ((_, _) => update("jni_useInput", true)) maxOccurs 1
           text "if the method takes input, it will take an InputStream as an argument",
+        parser.opt[Unit]("use-out-stream") action ((_, _) => update("jni_useOutput", true)) maxOccurs 1
+          text "the method will take an OutputStream as an argument for piping output into",
         parser.opt[Unit]("use-getchar") action ((_, _) => update("jni_usegetchar", true)) maxOccurs 1
           text "!!DON'T USE ME, I'M BROKEN!! if the method takes input, it will use the native getchar() method"
       ) text """output a jni-compatible library, to the given method.
@@ -72,6 +74,7 @@ object GCC extends Engine {
       val className = path(path.length - 2)
       val hasReads = src.contains(",")
       val useInStr = opts.jni_useInput[Boolean]
+      val useOutStr = opts.jni_useOutput[Boolean]
       val useGetChar = opts.jni_usegetchar[Boolean]
 
       val jWidth = width match {
@@ -82,7 +85,7 @@ object GCC extends Engine {
 
       val JWidth = jWidth(0).toUpper + jWidth.drop(1)
 
-      val jSrc = jniJavaSrc(path, jWidth, opts.exitCode[Boolean], hasReads && !useGetChar, useInStr && !useGetChar)
+      val jSrc = jniJavaSrc(path, jWidth, opts.exitCode[Boolean], hasReads && !useGetChar, useInStr && !useGetChar, useOutStr)
 
       write(new File(dir, className + ".java"), jSrc)
 
@@ -107,10 +110,17 @@ object GCC extends Engine {
          |#include <jni.h>
          |#include "${hName + ".h"}"
          |${ if(useGetChar) "" else if(useInStr) "\n#define INPSTR\n" else if(hasReads) "\n#define HASREADS\n" else "" }
-         |${ if(sig.group(3) ne null) "#define EXTRAARG\n" else ""}
+         |${ if(useOutStr) "\n#define OUTSTR\n"}
+         |${ if(sig.group(3) ne null) "\n#define EXTRAARG\n" else ""}
          |JNIEXPORT ${sig.group(1)} JNICALL ${sig.group(2)} (JNIEnv *env, jclass clazz
-         |#ifdef EXTRAARG
-         |  ,${sig.group(3)} a
+         |#ifdef INPSTR
+         |  ,jobject a /* java.io.InputStream */
+         |#endif
+         |#ifdef HASREADS
+         |  ,j${width}array a
+         |#endif
+         |#ifdef OUTSTR
+         |  ,jobject b /* java.io.OutputStream */
          |#endif
          |) {
          |  $width tape[${1 << 16}] = {0};
@@ -131,6 +141,11 @@ object GCC extends Engine {
          |  jmethodID read = (*env)->GetMethodID(env, InputStream, "read", "()I");
          |  jint readHolder;
          |#define getchar() (readHolder = (*env)->CallIntMethod(env, a, read), readHolder == -1 ? 0 : readHolder)
+         |#endif
+         |#ifdef OUTSTR
+         |  jclass OutputStream = (*env)->FindClass(env, "java/io/OutputStream");
+         |  jmethodID write = (*env)->GetMethodID(env, OutputStream, "write", "(I)V");
+         |#define putchar(C) (*env)->CallVoidMethod(env, b, write, C)
          |#endif
          |  /* start generated code */
          |$optimized
@@ -161,30 +176,51 @@ object GCC extends Engine {
 
     private val jniPathPattern = "(?:[a-zA-Z_0-9]+\\.)+(?:[a-zA-Z_0-9]+)"
 
-    private def jniJavaSrc(path: Array[String], width: String, hasReturn: Boolean, hasInput: Boolean, useInStr: Boolean) = {
+    private def jniJavaSrc(
+      path: Array[String],
+      width: String,
+      hasReturn: Boolean,
+      hasInput: Boolean,
+      useInStr: Boolean,
+      useOutStr: Boolean
+    ) = {
       val pack =
         if(path.length > 2)
           s"package ${path.slice(0, path.length - 2).mkString(".")};"
         else ""
       val name = path(path.length - 2)
       val meth = path(path.length - 1)
-      val arg =
+      val params = Seq(
         if(useInStr)
           "InputStream a"
         else if(hasInput)
           s"$width[] a"
+        else "",
+        if(useOutStr)
+          "OutputStream b"
         else ""
+      ).filter(_.nonEmpty).mkString(", ")
+      val args = Seq(
+        if(useInStr)
+          "System.in"
+        else if(hasInput)
+          s"new $width[0]"
+        else "",
+        if(useOutStr)
+          "System.out"
+        else ""
+      ).filter(_.nonEmpty).mkString(", ")
       val ret = if(hasReturn) "int" else "void"
-      val imp = if(useInStr) "import java.io.InputStream;" else ""
+      val imp = if(useInStr || useOutStr) "import java.io.*;" else ""
 
       s"""
        |$pack
        |$imp
        |public final class $name {
        |    static { System.loadLibrary("${path.mkString("_")}"); }
-       |    public $name() { throw new Error(); }
-       |    public static native $ret $meth($arg);
-       |    public static void main(String... args) { $meth(${if(useInStr) "System.in" else if(hasInput) s"new $width[0]" else ""}); }
+       |
+       |    public static native $ret $meth($params);
+       |    public static void main(String... args) { $meth($args); }
        |}
      """.stripMargin
     }

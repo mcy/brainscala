@@ -39,7 +39,7 @@ case object Interpreter extends Engine {
           case -1 => 0
           case c => c
         }).toChar
-    case Loop(ops) => do ops.foreach(run) while (Tape() != 0)
+    case Loop(ops) => while (Tape() != 0) ops.foreach(run)
   }
 
   object Tape {
