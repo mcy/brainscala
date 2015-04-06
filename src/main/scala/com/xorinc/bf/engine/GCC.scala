@@ -26,6 +26,8 @@ object GCC extends Engine {
           text "if the method takes input, it will take an InputStream as an argument",
         parser.opt[Unit]("use-out-stream") action ((_, _) => update("jni_useOutput", true)) maxOccurs 1
           text "the method will take an OutputStream as an argument for piping output into",
+        parser.opt[Unit]("use-io-streams") abbr "io" action ((_, _) => {update("jni_useInput", true); update("jni_useOutput", true)})
+          text "sets both of the --use-in-stream and --use-out-stream options",
         parser.opt[Unit]("use-getchar") action ((_, _) => update("jni_usegetchar", true)) maxOccurs 1
           text "!!DON'T USE ME, I'M BROKEN!! if the method takes input, it will use the native getchar() method"
       ) text """output a jni-compatible library, to the given method.
